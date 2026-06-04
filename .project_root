@@ -1,0 +1,2 @@
+# 项目根目录标记文件
+# 用于 utils.get_project_root() 自动检测项目根目录

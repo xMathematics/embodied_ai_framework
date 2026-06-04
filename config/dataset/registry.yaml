@@ -1,0 +1,78 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 数据集注册表配置文件 (registry.yaml)
+# ──────────────────────────────────────────────────────────────────────────────
+# 本文件定义了框架支持的所有数据集的元信息。
+# DatasetRegistry 类会自动读取此文件，构建可查询的数据集索引。
+#
+# 格式说明:
+#   datasets: 数据集列表，每个数据集包含:
+#     - name:        数据集名称 (唯一标识符)
+#     - source:      来源 (对应 DatasetSource 枚举)
+#     - description: 简短描述
+#     - url:         下载地址 (HTTP / S3 / HuggingFace Dataset ID)
+#     - format:      原始数据格式 (RLDS, HDF5, TFRecord, pickle 等)
+#     - robot_type:  机器人类型 (对应 RobotType 枚举)
+#     - modalities:  传感器模态列表 (对应 SensorModality 枚举)
+#     - adapter_name: 对应的适配器类名
+#     - num_trajs:   轨迹数量 (约数)
+#     - version:     版本号
+#     - license:     开源许可证
+#     - citation:    学术引用
+# ═══════════════════════════════════════════════════════════════════════════════
+
+datasets:
+  # ── Open X-Embodiment 子集: BridgeData V2 ────────────────────────────────
+  - name: bridge_v2
+    source: OPEN_X_EMBODIMENT
+    description: "BridgeData V2 - WidowX 250 桌面操控数据集"
+    url: "https://huggingface.co/datasets/physion/bridge_data_v2"
+    format: "rlds"
+    robot_type: FRANKA_EMIKA
+    modalities: ["RGB", "ROBOT_STATE"]
+    adapter_name: BridgeV2Adapter
+    num_trajs: 60000
+    version: "2.0"
+    license: "CC-BY 4.0"
+    citation: "Walke et al., BridgeData V2, 2023"
+
+  # ── RoboTurk 数据集 (Stanford) ────────────────────────────────────────────
+  - name: roboturk
+    source: ROBOTURK
+    description: "RoboTurk - Franka 远程操控数据"
+    url: "https://roboturk.stanford.edu/"
+    format: "hdf5"
+    robot_type: FRANKA_EMIKA
+    modalities: ["RGB", "DEPTH", "ROBOT_STATE"]
+    adapter_name: RoboTurkAdapter
+    num_trajs: 8000
+    version: "1.0"
+    license: "Stanford R&D"
+    citation: "Mandlekar et al., RoboTurk, 2018"
+
+  # ── ManiSkill 仿真数据 ────────────────────────────────────────────────────
+  - name: maniskill
+    source: MANISKILL
+    description: "ManiSkill - 铰接物体操控仿真数据"
+    url: "https://maniskill.ai/"
+    format: "hdf5"
+    robot_type: FRANKA_EMIKA
+    modalities: ["RGB", "DEPTH", "POINT_CLOUD", "ROBOT_STATE"]
+    adapter_name: ManiSkillAdapter
+    num_trajs: 100000
+    version: "2.0"
+    license: "MIT"
+    citation: "Gu et al., ManiSkill2, 2023"
+
+  # ── Language-Table 语言条件数据 ───────────────────────────────────────────
+  - name: language_table
+    source: LANGUAGE_TABLE
+    description: "Language-Table - 语言指令驱动的桌面操控"
+    url: "https://language-table.github.io/"
+    format: "tfrecord"
+    robot_type: CUSTOM
+    modalities: ["RGB", "LANGUAGE"]
+    adapter_name: LanguageTableAdapter
+    num_trajs: 450000
+    version: "1.0"
+    license: "MIT"
+    citation: "Lynch et al., Language-Table, 2022"

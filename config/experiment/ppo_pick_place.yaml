@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PPO 强化学习抓取任务实验配置
+# ──────────────────────────────────────────────────────────────────────────────
+# 使用 PPO 算法在仿真环境中训练机械臂抓取策略。
+# 与 BC 不同，PPO 不需要专家数据，直接在仿真中通过试错学习。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+experiment_name: "rl_manipulation"
+run_name: "ppo_pick_place_v1"
+seed: 42
+
+# ── 数据配置 (Offline RL 可选的演示数据) ─────────────────────────────────────
+data:
+  registry_path: "config/dataset/registry.yaml"
+  data_dir: "data/unified/bridge_v2"
+  batch_size: 256
+  num_workers: 4
+
+# ── 仿真配置 (并行环境) ──────────────────────────────────────────────────────
+simulation:
+  backend: "mujoco"
+  time_step: 0.002
+  max_steps: 500
+  num_envs: 16                        # 并行环境数 (PPO 需要大量并行采样)
+  task: "pick_place"                  # 任务类型
+
+# ── PPO 训练配置 ─────────────────────────────────────────────────────────────
+training:
+  algorithm: "ppo"
+  obs_dim: 128
+  action_dim: 7
+  learning_rate: 0.0003
+  gamma: 0.99                        # 折扣因子
+  gae_lambda: 0.95                   # GAE λ
+  clip_epsilon: 0.2                  # PPO 裁剪阈值
+  value_coef: 0.5                    # 价值损失权重
+  entropy_coef: 0.01                 # 熵正则化权重
+  max_grad_norm: 0.5                 # 梯度裁剪
+  update_epochs: 10                  # 每次采样后更新轮数
+  batch_size: 64                     # 小批量大小
+  max_iterations: 1000               # 最大迭代次数
+  steps_per_iteration: 2048          # 每次迭代采样步数 (per env)
+  checkpoint_dir: "checkpoints/ppo"
+
+# ── 评估配置 ─────────────────────────────────────────────────────────────────
+evaluation:
+  num_episodes: 50
+  render: true
+  video_dir: "videos/ppo_eval"
+  eval_interval: 50                  # 每 N 次迭代评估一次
