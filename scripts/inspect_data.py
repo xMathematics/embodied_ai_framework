@@ -46,10 +46,19 @@
  支持的查看格式
  ═══════════════════════════════════════════════════════════════════════════════
    - Arrow IPC 文件 (.arrow):    标准化数据格式，查看 schema、内容、统计
-   - TFRecord 文件 (.tfrecord):  原始 RLDS 格式，查看文件大小、轨迹分布
+   - TFRecord 文件 (.tfrecord*): 原始 RLDS 序列化格式，解析 episode、step、字段
    - HDF5 文件 (.h5/.hdf5):      原始格式，查看数据集和属性
    - 目录结构:                    查看文件分布和占用空间
    - 注册表元信息:                从 registry.yaml 读取数据集配置
+
+ ═══════════════════════════════════════════════════════════════════════════════
+ RLDS (Reinforcement Learning Dataset Standard) 格式说明
+ ═══════════════════════════════════════════════════════════════════════════════
+   RLDS 是基于 TFRecord 的序列化格式，广泛用于 Open X-Embodiment 等具身数据集。
+   每条 TFRecord 记录对应一个完整 episode，包含 step 级和 context 级特征：
+     - Context 特征: episode 级别的元信息（episode_id, file_path 等）
+     - Step 特征:   每个时间步的观测、动作、奖励、终止标志等
+   不同数据集的特征键名可能不同，工具会自动检测可用特征。
 ================================================================================
 """
 
@@ -59,7 +68,7 @@ import sys
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 from datetime import datetime
 from collections import defaultdict
 
@@ -116,6 +125,500 @@ def _print_key_value(key: str, value: Any, key_width: int = 24) -> None:
 def _print_separator(char: str = "─", width: int = 70) -> None:
     """打印分隔线"""
     print(f"  {char * width}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RLDS / TFRecord 解析辅助函数
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_tfrecord_files(data_dir: Path) -> List[Path]:
+    """获取目录下所有 TFRecord 文件"""
+    return sorted(data_dir.glob("*.tfrecord*"))
+
+
+def _detect_rlds_features(tfrecord_path: Path) -> Optional[Dict[str, List[str]]]:
+    """
+    自动检测 RLDS TFRecord 文件中的可用特征键名
+    ────────────────────────────────────────────────────────────────────────────
+    通过加载第一条记录，从 tfrecord_loader 返回的键名中提取所有可用特征。
+    将特征分为 step 级 (steps/ 前缀) 和 context 级两类。
+
+    Returns:
+        {"step_keys": [...], "context_keys": [...]} 或 None (解析失败)
+    """
+    try:
+        from tfrecord import tfrecord_loader
+        # 空 description 会返回所有可用键名
+        loader = tfrecord_loader(str(tfrecord_path), None, {})
+        for episode in loader:
+            all_keys = list(episode.keys())
+            # 自动区分 step 和 context 键
+            step_keys = sorted(k for k in all_keys if k.startswith("steps/"))
+            context_keys = sorted(k for k in all_keys if not k.startswith("steps/"))
+            return {"step_keys": step_keys, "context_keys": context_keys}
+    except Exception:
+        pass
+    return None
+
+
+def _build_rlds_description(step_keys: List[str]) -> Dict[str, str]:
+    """
+    根据 RLDS 特征键名自动构建 feature description
+    ────────────────────────────────────────────────────────────────────────────
+    根据键名后缀推断数据类型:
+      - image / rgb / depth / mask → 'byte' (JPEG/PNG bytes)
+      - state / action / reward / discount → 'float'
+      - is_terminal / is_first / is_last / is_pad → 'int'
+      - language_instruction / language_text → 'byte'
+      - language_embedding / embed → 'float'
+      - 默认 → 'float'
+    """
+    description = {}
+    for key in step_keys:
+        # 去掉 steps/ 前缀进行判断
+        name = key.split("/")[-1].lower()
+        if any(img_kw in name for img_kw in ["image", "rgb", "depth", "mask", "wrist"]):
+            description[key] = "byte"
+        elif any(int_kw in name for int_kw in ["is_terminal", "is_first", "is_last", "is_pad", "is_keyframe", "action_uid"]):
+            description[key] = "int"
+        elif any(byte_kw in name for byte_kw in ["language_instruction", "language_text", "natural_language"]):
+            description[key] = "byte"
+        elif any(embed_kw in name for embed_kw in ["embedding"]):
+            description[key] = "float"
+        else:
+            description[key] = "float"
+    return description
+
+
+def _load_rlds_data(
+    tfrecord_path: Path,
+    description: Optional[Dict[str, str]] = None,
+    max_episodes: int = -1,
+) -> List[Dict[str, Any]]:
+    """
+    加载 RLDS TFRecord 文件，返回 episode 列表
+    ────────────────────────────────────────────────────────────────────────────
+    每个 episode 是一个字典，键为 step 特征名，值为 numpy 数组。
+    支持自动检测特征键和数据类型。
+
+    Args:
+        tfrecord_path: TFRecord 文件路径
+        description: 特征描述字典，None 时自动检测
+        max_episodes: 最大加载 epiode 数，-1 表示全部
+
+    Returns:
+        episode 数据列表
+    """
+    try:
+        from tfrecord import tfrecord_loader
+
+        # 自动检测特征
+        if description is None:
+            features = _detect_rlds_features(tfrecord_path)
+            if features and features["step_keys"]:
+                description = _build_rlds_description(features["step_keys"])
+            else:
+                # 兜底: 使用 Bridge 常见的特征键
+                description = {
+                    "steps/observation/image_0": "byte",
+                    "steps/observation/state": "float",
+                    "steps/action": "float",
+                    "steps/reward": "float",
+                    "steps/is_terminal": "int",
+                    "steps/is_first": "int",
+                    "steps/is_last": "int",
+                    "steps/discount": "float",
+                    "steps/language_instruction": "byte",
+                }
+
+        loader = tfrecord_loader(str(tfrecord_path), None, description, None)
+        episodes = []
+        for i, episode in enumerate(loader):
+            if max_episodes > 0 and i >= max_episodes:
+                break
+            episodes.append(episode)
+        return episodes
+    except ImportError:
+        print("  ❌ 缺少 tfrecord 库。请安装: pip install tfrecord")
+        return []
+    except Exception as e:
+        print(f"  ⚠️  加载 RLDS 数据失败: {e}")
+        return []
+
+
+def _decode_rlds_bytes(byte_data: Any) -> str:
+    """解码 RLDS 中的 bytes 字段为字符串"""
+    if isinstance(byte_data, bytes):
+        return byte_data.decode("utf-8", errors="replace")
+    if isinstance(byte_data, (list, tuple, np.ndarray)):
+        for item in byte_data:
+            if isinstance(item, (bytes, str)) and len(item) > 0:
+                return _decode_rlds_bytes(item)
+    return str(byte_data)
+
+
+def _get_jpeg_info(jpeg_bytes: bytes) -> Tuple[int, int, int]:
+    """
+    从 JPEG 字节数据中解析图像尺寸
+    ────────────────────────────────────────────────────────────────────────────
+    解析 JPEG 的 SOF (Start of Frame) 段来获取宽度和高度。
+    无需安装 PIL/OpenCV。
+
+    Returns:
+        (width, height, estimated_size_bytes)
+    """
+    try:
+        # JPEG 文件头: FF D8 FF
+        if jpeg_bytes[0:2] != b'\xff\xd8':
+            return (0, 0, len(jpeg_bytes))
+
+        # 搜索 SOF0 (FF C0) 或 SOF2 (FF C2) 标记
+        i = 2
+        while i < len(jpeg_bytes) - 1:
+            if jpeg_bytes[i] == 0xFF:
+                marker = jpeg_bytes[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2):  # SOF0, SOF1, SOF2
+                    # SOF 段: 长度(2) + 精度(1) + 高度(2) + 宽度(2)
+                    height = (jpeg_bytes[i + 5] << 8) | jpeg_bytes[i + 6]
+                    width = (jpeg_bytes[i + 7] << 8) | jpeg_bytes[i + 8]
+                    return (width, height, len(jpeg_bytes))
+                elif marker == 0xD9:  # EOI
+                    break
+                elif marker == 0xDA:  # SOS - 图像数据开始
+                    break
+            i += 1
+        return (0, 0, len(jpeg_bytes))
+    except Exception:
+        return (0, 0, len(jpeg_bytes))
+
+
+def _show_rlds_schema(tfrecord_path: Path, max_episodes: int = 3) -> None:
+    """解析并显示 RLDS TFRecord 文件的 Schema"""
+    import numpy as np
+
+    # 自动检测特征
+    features = _detect_rlds_features(tfrecord_path)
+    if features:
+        all_step_keys = features["step_keys"]
+        context_keys = features["context_keys"]
+    else:
+        all_step_keys = []
+        context_keys = []
+
+    if not all_step_keys and not context_keys:
+        print(f"  ⚠️  无法检测 RLDS 特征键。尝试加载数据...")
+        episodes = _load_rlds_data(tfrecord_path, max_episodes=1)
+        if not episodes:
+            return
+        all_step_keys = list(episodes[0].keys())
+        context_keys = []
+
+    print(f"  文件: {tfrecord_path.name}")
+    print()
+
+    # Context 特征 (episode 级别)
+    if context_keys:
+        print(f"  ┌─ Context 特征 (episode 级别, 每条记录一个值):")
+        for key in sorted(context_keys):
+            print(f"  │   ├── {key}")
+        print(f"  │   └── 共 {len(context_keys)} 个 context 特征")
+        print()
+
+    # Step 特征 (时间步级别)
+    print(f"  ┌─ Step 特征 (时间步级别, 每个 time step 一组值):")
+    if not all_step_keys:
+        print(f"  │   └── (未检测到 step 特征)")
+        print()
+        return
+
+    episodes = _load_rlds_data(tfrecord_path, max_episodes=1)
+    if episodes:
+        episode = episodes[0]
+        num_steps_per_episode = 0
+        # 找到标量特征 (如 steps/reward, steps/is_first) 来获取真实步数
+        for key in all_step_keys:
+            val = episode.get(key)
+            if val is not None and hasattr(val, '__len__') and len(val) > 0:
+                # 检查是否为多维 flattened (state/action通常是 steps*dim)
+                if val.ndim == 1 and len(val) == val.shape[0]:
+                    # 用 reward 等标量特征确定步数
+                    if "reward" in key or "is_first" in key or "is_last" in key or "is_terminal" in key or "discount" in key:
+                        num_steps_per_episode = len(val)
+                        break
+        # 兜底: 取第一个特征的长度 (避开 flattened 多维特征)
+        if num_steps_per_episode == 0:
+            for key in all_step_keys:
+                val = episode.get(key)
+                if val is not None and hasattr(val, '__len__') and len(val) > 0:
+                    # 取最短的特征作为步数 (reward 等标量特征最短)
+                    candidate = len(val)
+                    if num_steps_per_episode == 0 or candidate < num_steps_per_episode:
+                        num_steps_per_episode = candidate
+
+        for key in sorted(all_step_keys):
+            val = episode.get(key, np.array([]))
+            if val is None or val.size == 0:
+                print(f"  │   ├── {key:<40s}  (空)")
+                continue
+            dtype_str = str(val.dtype)
+            shape_str = str(list(val.shape))
+            elem_bytes = val.nbytes
+            # 对于 flattened 多维特征，计算每个 step 的实际元素数
+            if num_steps_per_episode > 0 and val.ndim == 1 and len(val) > 0 and len(val) > num_steps_per_episode:
+                per_step = len(val) // num_steps_per_episode
+                display_steps = num_steps_per_episode
+            else:
+                per_step = 1
+                display_steps = len(val) if val.ndim > 0 else 0
+            print(f"  │   ├── {key:<40s}  dtype={dtype_str:<12s}  shape={shape_str:<24s}  {_format_bytes(elem_bytes)}/episode (≈{_format_bytes(elem_bytes // max(1, display_steps))}/step)")
+
+            # 显示子字段信息
+            if "image" in key or "rgb" in key or "depth" in key:
+                if len(val) > 0:
+                    img_bytes = val[0]
+                    if isinstance(img_bytes, bytes):
+                        w, h, sz = _get_jpeg_info(img_bytes)
+                        if w > 0 and h > 0:
+                            print(f"  │   │    图像尺寸: {w}x{h}, JPEG压缩: {_format_bytes(sz)}")
+            elif "state" in key and per_step > 1:
+                print(f"  │   │    每步维度: {per_step}")
+            elif "action" in key and per_step > 1:
+                print(f"  │   │    每步动作维度: {per_step}")
+
+            # 显示数值范围 (对 float 类型)
+            if val.dtype in (np.float32, np.float64) and val.size > 0 and not np.all(np.isnan(val)):
+                print(f"  │   │    数值范围: [{val.min():.4f}, {val.max():.4f}], mean={val.mean():.4f}")
+            elif "language" in key and len(val) > 0:
+                try:
+                    text = _decode_rlds_bytes(val[0])
+                    if text and len(text) > 40:
+                        text = text[:40] + "..."
+                    print(f"  │   │    示例: \"{text}\"")
+                except Exception:
+                    pass
+
+        print(f"  │   └── 共 {len(all_step_keys)} 个 step 特征 (每条记录 ≈{num_steps_per_episode} 个时间步)")
+    else:
+        for key in sorted(all_step_keys):
+            print(f"  │   ├── {key}")
+        print(f"  │   └── 共 {len(all_step_keys)} 个 step 特征")
+    print()
+
+
+def _show_rlds_stats(tfrecord_files: List[Path]) -> None:
+    """显示 RLDS TFRecord 文件的详细统计数据"""
+    import numpy as np
+    from tfrecord import tfrecord_loader
+
+    # 自动检测并构建 description
+    features = _detect_rlds_features(tfrecord_files[0]) if tfrecord_files else None
+    step_desc = _build_rlds_description(features["step_keys"]) if features and features["step_keys"] else {}
+
+    total_episodes = 0
+    total_steps = 0
+    traj_lengths = []
+    episode_rewards = []
+    image_info = {"count": 0, "min_size": float('inf'), "max_size": 0}
+    action_data = []
+    state_data = []
+
+    for f in tfrecord_files:
+        file_eps = 0
+        file_steps = 0
+        loader = tfrecord_loader(str(f), None, step_desc, None)
+        for episode in loader:
+            file_eps += 1
+
+            # 确定步数: 用标量特征
+            n_steps = 0
+            for scalar_key in ["steps/reward", "steps/is_first", "steps/is_last", "steps/is_terminal", "steps/discount"]:
+                if scalar_key in episode:
+                    n_steps = len(episode[scalar_key])
+                    break
+            if n_steps == 0:
+                # 取最短特征长度
+                n_steps = min(len(v) for v in episode.values() if hasattr(v, '__len__') and len(v) > 0)
+
+            file_steps += n_steps
+            traj_lengths.append(n_steps)
+
+            if "steps/reward" in episode:
+                episode_rewards.append(np.sum(episode["steps/reward"]))
+
+            # 图像信息
+            for k in episode:
+                if "image" in k or "rgb" in k:
+                    img_data = episode[k]
+                    if len(img_data) > 0:
+                        for b in img_data:
+                            if isinstance(b, bytes):
+                                image_info["count"] += 1
+                                image_info["min_size"] = min(image_info["min_size"], len(b))
+                                image_info["max_size"] = max(image_info["max_size"], len(b))
+
+            # 动作统计
+            if "steps/action" in episode:
+                action_data.append(episode["steps/action"])
+
+            # 状态统计
+            if "steps/observation/state" in episode:
+                state_data.append(episode["steps/observation/state"])
+
+            if file_eps >= 100:  # 采样限制
+                break
+        total_episodes += file_eps
+        total_steps += file_steps
+
+    if total_episodes == 0:
+        print("  ⚠️  无法读取统计数据。")
+        return
+
+    print(f"  ┌─ Episode 统计:")
+    print(f"  │   总 Episode 数: {total_episodes} (采样)")
+    print(f"  │   总 Step 数:   {total_steps}")
+    if traj_lengths:
+        lengths = traj_lengths
+        print(f"  │   轨迹长度范围: {min(lengths)} ~ {max(lengths)} 步")
+        print(f"  │   平均长度:     {sum(lengths) / len(lengths):.1f} 步")
+        if len(lengths) > 1:
+            import statistics
+            print(f"  │   标准差:       {statistics.stdev(lengths):.1f} 步")
+    print(f"  │")
+
+    if episode_rewards:
+        print(f"  ├─ 奖励统计 (每 episode 总和):")
+        print(f"  │   范围: [{min(episode_rewards):.3f}, {max(episode_rewards):.3f}]")
+        print(f"  │   均值: {sum(episode_rewards) / len(episode_rewards):.3f}")
+        print(f"  │")
+
+    if image_info["count"] > 0:
+        print(f"  ├─ 图像统计:")
+        print(f"  │   图像总数: {image_info['count']}")
+        print(f"  │   JPEG 大小范围: {_format_bytes(image_info['min_size'])} ~ {_format_bytes(image_info['max_size'])}")
+        print(f"  │   平均 JPEG 大小: {_format_bytes(int(image_info['min_size'] + image_info['max_size']) // 2)} (估计)")
+        print(f"  │")
+
+    if action_data:
+        action_all = np.concatenate(action_data)
+        if total_steps > 0:
+            action_per_step = action_all.shape[0] // max(1, total_steps)
+        else:
+            action_per_step = 7
+        if action_per_step > 1:
+            reshaped = action_all.reshape(-1, action_per_step)
+            print(f"  ├─ 动作统计 (每步 {action_per_step} 维):")
+            for i in range(min(action_per_step, 7)):
+                vals = reshaped[:, i]
+                print(f"  │   dim[{i}]: range=[{vals.min():.4f}, {vals.max():.4f}], mean={vals.mean():.4f}, std={vals.std():.4f}")
+            print(f"  │")
+
+    if state_data:
+        state_all = np.concatenate(state_data)
+        if total_steps > 0:
+            state_per_step = state_all.shape[0] // max(1, total_steps)
+        else:
+            state_per_step = 7
+        if state_per_step > 1:
+            reshaped = state_all.reshape(-1, state_per_step)
+            print(f"  └─ 状态统计 (每步 {state_per_step} 维):")
+            for i in range(min(state_per_step, 7)):
+                vals = reshaped[:, i]
+                print(f"      dim[{i}]: range=[{vals.min():.4f}, {vals.max():.4f}], mean={vals.mean():.4f}, std={vals.std():.4f}")
+    print()
+
+
+def _show_rlds_samples(tfrecord_files: List[Path], num_episodes: int) -> None:
+    """显示 RLDS TFRecord 文件中的样本内容"""
+    import numpy as np
+
+    description = _build_rlds_description(
+        _detect_rlds_features(tfrecord_files[0]).get("step_keys", [])
+        if _detect_rlds_features(tfrecord_files[0]) else []
+    ) if tfrecord_files else {}
+
+    episodes_loaded = 0
+    for file_idx, f in enumerate(tfrecord_files):
+        if episodes_loaded >= num_episodes:
+            break
+
+        episodes = _load_rlds_data(f, description, num_episodes - episodes_loaded)
+        for ep_idx, episode in enumerate(episodes):
+            if episodes_loaded >= num_episodes:
+                break
+            episodes_loaded += 1
+
+            # 确定步数
+            n_steps = len(episode.get("steps/reward",
+                         episode.get(list(description.keys())[0], [])))
+
+            print(f"  ─── Episode [{episodes_loaded}] (文件 {file_idx + 1}/{len(tfrecord_files)}, "
+                  f"{n_steps} 步) ───────")
+
+            # 显示语言指令
+            for k in episode:
+                if "language" in k and "embed" not in k:
+                    val = episode[k]
+                    if len(val) > 0:
+                        text = _decode_rlds_bytes(val[0])
+                        print(f"    语言指令: \"{text}\"")
+                        break
+
+            # 显示前 min(3, n_steps) 步
+            max_steps = min(3, n_steps)
+            for t in range(max_steps):
+                print(f"    ┌─ 步 [{t + 1}/{n_steps}] ───────────────────────")
+                for key in sorted(episode.keys()):
+                    val = episode[key]
+
+                    # 处理 step 级特征 (shape: (steps,) 或 (steps * dim,))
+                    if val.ndim == 1 and len(val) > 0:
+                        val_len = len(val)
+
+                        if "image" in key or "rgb" in key or "depth" in key or "mask" in key:
+                            # 图像 bytes
+                            if t < len(val):
+                                b = val[t]
+                                if isinstance(b, bytes):
+                                    w, h, sz = _get_jpeg_info(b)
+                                    dim_str = f"{w}x{h}" if w > 0 else "?"
+                                    print(f"    │  {key:<36s}  JPEG {dim_str}  {_format_bytes(sz)}")
+                                else:
+                                    print(f"    │  {key:<36s}  shape=({len(val)},)  dtype={val.dtype}")
+                        elif "language" in key and "embed" not in key:
+                            if t < len(val):
+                                text = _decode_rlds_bytes(val[t])
+                                print(f"    │  {key:<36s}  \"{text[:60] if len(text) > 60 else text}\"")
+                        elif val_len == n_steps:
+                            # 每个 step 一个标量值
+                            if t < len(val):
+                                v = val[t]
+                                if isinstance(v, (np.floating, float)):
+                                    print(f"    │  {key:<36s}  {v:.4f}")
+                                else:
+                                    print(f"    │  {key:<36s}  {v}")
+                        elif val_len % n_steps == 0:
+                            # 每个 step 多维向量 (flattened)
+                            dim = val_len // n_steps
+                            start = t * dim
+                            end = start + dim
+                            vec = val[start:end]
+                            if dim <= 16:
+                                vals_str = ", ".join(f"{v:.4f}" if isinstance(v, (np.floating, float)) else str(v) for v in vec)
+                                print(f"    │  {key:<36s}  [{vals_str}]")
+                            else:
+                                print(f"    │  {key:<36s}  dim={dim}  mean={vec.mean():.4f}  std={vec.std():.4f}  "
+                                      f"range=[{vec.min():.4f}, {vec.max():.4f}]")
+                        else:
+                            print(f"    │  {key:<36s}  shape=({val_len},)  dtype={val.dtype}")
+                    else:
+                        print(f"    │  {key:<36s}  shape={list(val.shape)}  dtype={val.dtype}")
+
+                print(f"    └─")
+                print()
+
+            if n_steps > 3:
+                print(f"      ... 还有 {n_steps - 3} 步未显示")
+                print()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -256,7 +759,10 @@ def show_tree(registry: DatasetRegistry, dataset_name: str, local_path: Optional
 
 
 def show_schema(dataset_name: str, local_path: Optional[str] = None) -> None:
-    """显示 Arrow 数据文件的 Schema（列名、类型、样本形状）"""
+    """显示数据文件的 Schema（列名、类型、样本形状）
+
+    支持 Arrow IPC 和 RLDS/TFRecord 两种格式。
+    """
     # 确定路径
     if local_path:
         data_dir = Path(local_path)
@@ -270,23 +776,26 @@ def show_schema(dataset_name: str, local_path: Optional[str] = None) -> None:
     print()
 
     if not data_dir.exists():
-        # 尝试 TFRecord 等其他格式
-        raw_dir = project_root / "data" / "unified" / dataset_name
-        tfrecord_files = list(raw_dir.rglob("*.tfrecord*"))
-        if tfrecord_files:
-            print(f"  数据格式: TFRecord (原始 RLDS 格式)")
-            print(f"  文件数: {len(tfrecord_files)}")
-            sample_file = tfrecord_files[0]
-            print(f"  示例文件: {sample_file.name} ({_format_bytes(sample_file.stat().st_size)})")
-            print()
-            print(f"  ⚠️  TFRecord 格式的 Schema 需要加载样本后才能显示。")
-            print(f"     请使用 --samples 参数查看具体内容。")
-            return
-        else:
-            print(f"  ❌ 数据目录不存在，无法读取 Schema。")
-            print(f"  💡 请先运行 scripts/prepare_data.py 准备数据。")
-            return
+        print(f"  ❌ 数据目录不存在，无法读取 Schema。")
+        print(f"  💡 请先运行 scripts/prepare_data.py 准备数据。")
+        return
 
+    # ── 检测数据格式 ───────────────────────────────────────────────────────
+    arrow_files = sorted(data_dir.glob("*.arrow"))
+    tfrecord_files = _get_tfrecord_files(data_dir)
+
+    if tfrecord_files and not arrow_files:
+        # RLDS / TFRecord 格式
+        print(f"  数据格式: RLDS (TFRecord 序列化)")
+        print(f"  文件数: {len(tfrecord_files)}")
+        print()
+        _show_rlds_schema(tfrecord_files[0])
+        return
+    elif not arrow_files and not tfrecord_files:
+        print(f"  ⚠️  目录中没有可识别的数据文件 (.arrow / .tfrecord)。")
+        return
+
+    # Arrow 格式 (已有逻辑)
     try:
         reader = TrajectoryReader(str(data_dir))
         if len(reader) == 0:
@@ -424,7 +933,7 @@ def show_stats(dataset_name: str, local_path: Optional[str] = None) -> None:
         except Exception as e:
             print(f"  ⚠️  读取 Arrow 统计失败: {e}")
 
-    # TFRecord 文件统计
+    # TFRecord 文件统计 — 包含 RLDS 内容解析
     if tfrecord_files:
         print(f"  ┌─ TFRecord 文件统计:")
         sizes = [f.stat().st_size for f in tfrecord_files]
@@ -432,7 +941,14 @@ def show_stats(dataset_name: str, local_path: Optional[str] = None) -> None:
         print(f"  │   总大小: {_format_bytes(sum(sizes))}")
         print(f"  │   文件大小区间: {_format_bytes(min(sizes))} ~ {_format_bytes(max(sizes))}")
         print(f"  │   平均大小: {_format_bytes(sum(sizes) / len(sizes))}")
-        print(f"  └──")
+        print(f"  │")
+        # 尝试解析 RLDS 内容统计
+        try:
+            print(f"  └─ RLDS 内容统计:")
+            _show_rlds_stats(tfrecord_files)
+        except Exception:
+            print(f"  └── (RLDS 解析失败，请安装 tfrecord 库: pip install tfrecord)")
+            print()
 
     # HDF5 文件统计
     if h5_files:
@@ -449,24 +965,30 @@ def _show_file_samples(data_dir: Path, dataset_name: str, num_samples: int) -> b
     Returns:
         True 如果找到了可显示的文件
     """
-    tfrecord_files = sorted(data_dir.glob("*.tfrecord*"))
+    tfrecord_files = _get_tfrecord_files(data_dir)
     h5_files = sorted(data_dir.glob("*.h5")) + sorted(data_dir.glob("*.hdf5"))
 
     if tfrecord_files:
-        print(f"  数据格式: TFRecord (原始 RLDS 格式)")
+        print(f"  数据格式: RLDS (TFRecord 序列化)")
         print(f"  文件数: {len(tfrecord_files)}")
         print()
-        for i, f in enumerate(tfrecord_files[:num_samples]):
-            stat = f.stat()
-            print(f"  ─── 文件 [{i + 1}/{min(len(tfrecord_files), num_samples)}] ───")
-            print(f"    文件名: {f.name}")
-            print(f"    大小:   {_format_bytes(stat.st_size)}")
-            print(f"    修改时间: {_format_timestamp(stat.st_mtime)}")
-        if len(tfrecord_files) > num_samples:
-            print(f"    ... 还有 {len(tfrecord_files) - num_samples} 个文件未显示")
-        print()
-        print(f"  💡 提示: TFRecord 是 RLDS 格式的序列化文件，")
-        print(f"     需使用 tensorflow_datasets 或 datasets 库解析具体内容。")
+        print(f"  ┌─ 解析 RLDS 内容...")
+        try:
+            _show_rlds_samples(tfrecord_files, num_samples)
+        except ImportError:
+            print(f"  ❌ 缺少 tfrecord 库。请安装: pip install tfrecord")
+            return True
+        except Exception as e:
+            print(f"  ⚠️  解析 RLDS 内容失败: {e}")
+            print(f"     回退到文件信息模式。")
+            for i, f in enumerate(tfrecord_files[:num_samples]):
+                stat = f.stat()
+                print(f"  ─── 文件 [{i + 1}/{min(len(tfrecord_files), num_samples)}] ───")
+                print(f"    文件名: {f.name}")
+                print(f"    大小:   {_format_bytes(stat.st_size)}")
+                print(f"    修改时间: {_format_timestamp(stat.st_mtime)}")
+            if len(tfrecord_files) > num_samples:
+                print(f"    ... 还有 {len(tfrecord_files) - num_samples} 个文件未显示")
         return True
 
     if h5_files:
@@ -626,10 +1148,12 @@ def show_summary(registry: DatasetRegistry, dataset_name: str, local_path: Optio
         _print_key_value("建议", f"运行: python scripts/prepare_data.py --datasets={dataset_name}", key_width=18)
     print()
 
-    # ── 3. 轨迹统计 (如果有 Arrow 文件) ─────────────────────────────────────
+    # ── 3. 轨迹统计 (Arrow / RLDS) ─────────────────────────────────────────
     arrow_files = sorted(target_path.glob("*.arrow")) if target_path.exists() else []
+    tfrecord_files = _get_tfrecord_files(target_path) if target_path.exists() else []
+
     if arrow_files:
-        print("  ▸ 轨迹统计信息")
+        print("  ▸ 轨迹统计信息 (Arrow)")
         try:
             reader = TrajectoryReader(str(target_path))
             num_trajs = len(reader)
@@ -655,6 +1179,12 @@ def show_summary(registry: DatasetRegistry, dataset_name: str, local_path: Optio
                 _print_key_value("观测维度", str(obs_dims), key_width=18)
                 _print_key_value("动作维度", list(sample_traj.actions.shape[1:]), key_width=18)
 
+        except Exception as e:
+            _print_key_value("读取失败", str(e), key_width=18)
+    elif tfrecord_files:
+        print("  ▸ 轨迹统计信息 (RLDS)")
+        try:
+            _show_rlds_stats(tfrecord_files)
         except Exception as e:
             _print_key_value("读取失败", str(e), key_width=18)
     print()
@@ -722,7 +1252,7 @@ def parse_args():
     )
     parser.add_argument(
         "--schema", action="store_true",
-        help="查看 Arrow 数据文件的 Schema (列名、类型、形状)"
+        help="查看数据文件的 Schema (Arrow 或 RLDS 的列名、类型、形状)"
     )
     parser.add_argument(
         "--stats", action="store_true",

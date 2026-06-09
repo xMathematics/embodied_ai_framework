@@ -31,7 +31,7 @@
 | 1 | **VLA 大模型 + 模块融合引擎** | 14 | 新增 VLA 大模型模块、融合引擎、VLA+RL+世界模型三模块融合机制 |
 | 2 | **本地优先数据加载** | 10 | 数据加载从云存储下载改为本地路径加载，路径由配置文件统一管理 |
 | 3 | **变更日志文档** | 1 | 创建本文档，汇总所有修改记录 |
-| 4 | **数据集查看脚本** | 2 | 新增 inspect_data.py 数据查看脚本，更新设计架构文档 |
+| 4 | **数据集查看脚本** | 2+ → 3 | 新增 inspect_data.py 数据查看脚本 + RLDS 格式解析能力，更新设计架构文档 |
 
 ---
 
@@ -453,8 +453,30 @@ python scripts/inspect_data.py --dataset=roboturk --stats
 
 **支持的三种数据格式**：
 1. **Arrow IPC** (`.arrow`) — 标准化格式，显示完整 Schema、轨迹长度分布、样本数值
-2. **TFRecord** (`.tfrecord*`) — 原始 RLDS 格式，显示文件大小和分布
+2. **TFRecord** (`.tfrecord*`) — 原始 RLDS 格式，解析 episode/step 级别内容
 3. **HDF5** (`.h5`/`.hdf5`) — 原始格式，显示文件信息
+
+**依赖安装**：
+```bash
+# inspect_data.py 需要以下库解析 RLDS/TFRecord 格式
+pip install tfrecord
+```
+
+**RLDS 格式解析能力**（第 4 次更新增强）：
+
+| 查看模式 | RLDS 支持内容 |
+|---------|--------------|
+| `--schema` | 自动检测 20+ 特征键名，区分 context/step 特征；显示每个特征的 dtype、shape、每步维度；解码 JPEG 图像尺寸 (256x256)；显示语言指令示例 |
+| `--stats` | 统计总 Episode 数、总 Step 数、轨迹长度分布 (均值/标准差)；每维动作/状态的数据范围；图像 JPEG 压缩大小分布 |
+| `--samples` | 逐 Episode 显示语言指令；前 3 步的完整特征数值（动作向量、状态向量、图像尺寸）；标量特征 (reward/discount/is_first 等) |
+| `--summary` | 综合展示注册信息 + 本地状态 + RLDS 轨迹统计 |
+
+**RLDS 解析技术实现**：
+- 使用 `tfrecord` 库直接解析本地 TFRecord 文件，无需安装 TensorFlow
+- `_detect_rlds_features()`：自动检测 RLDS 特征键名，区分 step 和 context
+- `_build_rlds_description()`：根据键名后缀自动推断数据类型（byte/float/int）
+- `_get_jpeg_info()`：从 JPEG 字节流解析图像尺寸，无需 PIL/OpenCV
+- 自动识别 flattened 多维特征（如 `steps/action` 被展平为 `steps*7`）
 
 **与现有工具的关系**：
 - `prepare_data.py`：负责 **写入** 标准化数据
