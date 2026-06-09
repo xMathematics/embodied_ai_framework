@@ -17,14 +17,31 @@ seed: 42                            # 随机种子，确保可复现性
 log_file: "logs/bc_manipulation.log"
 
 # ── 数据配置 ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# 数据加载方式: 从本地路径加载
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 【本地路径】标准化数据目录
+#   - 指向 prepare_data.py 预处理后的 Arrow 文件目录
+#   - 支持相对路径 (相对于项目根目录) 和绝对路径
+#   - 示例:
+#       相对路径: "data/unified/bridge_v2"
+#       绝对路径: "/mnt/nvme/data/bridge_v2"
+#       环境变量: "${DATA_ROOT}/bridge_v2" (需 Hydra 启用环境变量解析)
+#   - 如果该目录不存在或为空，运行 prepare_data.py 生成:
+#     python scripts/prepare_data.py --datasets=bridge_v2 --local_path=data/unified/bridge_v2
+#
+# registry_path: 数据集注册表路径 (用于查询默认路径和元信息)
+# batch_size: 批次大小 (VLA 模型建议 8-16，BC/ACT 建议 128-256)
+# num_workers: 数据加载进程数 (SSD 建议 4-8，NVMe 建议 8-16)
+# ═══════════════════════════════════════════════════════════════════════════════
 data:
-  registry_path: "config/dataset/registry.yaml"
-  data_dir: "data/unified/bridge_v2"  # 标准化后的数据路径
-  dataset_name: "bridge_v2"           # 使用的数据集
-  batch_size: 256                     # 训练批次大小
-  num_workers: 4                      # 数据加载工作进程数
-  augment: true                       # 是否启用数据增强
-  augment_config:                     # 增强参数
+  registry_path: "config/dataset/registry.yaml"   # 数据集注册表
+  data_dir: "data/unified/bridge_v2"               # ← 本地路径: 箭头文件目录
+  dataset_name: "bridge_v2"                        # 数据集名称 (用于查询 registry)
+  batch_size: 256                                  # 训练批次大小
+  num_workers: 4                                   # 数据加载工作进程数
+  augment: true                                    # 是否启用数据增强
+  augment_config:                                  # 增强参数
     crop_scale: [0.9, 1.0]
     brightness: 0.1
     contrast: 0.1

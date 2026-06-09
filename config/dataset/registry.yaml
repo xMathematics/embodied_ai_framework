@@ -20,12 +20,35 @@
 #     - citation:    学术引用
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 重要说明: 数据路径配置
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# local_path: 标准化数据本地路径 (推荐)
+#   - 指向 prepare_data.py 输出的 Arrow IPC 文件目录
+#   - 训练时 UnifiedDataset(data_dir=local_path) 直接读取
+#   - 如目录不存在或为空，需先运行 prepare_data.py 生成
+#   - 支持相对路径 (相对于项目根目录) 和绝对路径
+#
+# raw_path: 原始数据本地缓存路径 (仅 prepare_data.py 使用)
+#   - 指向下载或拷贝的原始数据集文件
+#   - 适配器从此目录读取原始文件并转换为标准化格式
+#   - prepare_data.py 将转换结果输出到 local_path
+#
+# 路径优先级: 实验配置 data.data_dir > 本文件 local_path > 内置默认
+# ═══════════════════════════════════════════════════════════════════════════════
+
 datasets:
   # ── Open X-Embodiment 子集: BridgeData V2 ────────────────────────────────
   - name: bridge_v2
     source: OPEN_X_EMBODIMENT
     description: "BridgeData V2 - WidowX 250 桌面操控数据集"
+    # ── 本地路径配置 ────────────────────────────────────────────────────────
+    local_path: "data/unified/bridge_v2"       # ← 标准化数据位置 (推荐)
+    raw_path: "data/raw/bridge_v2"              # ← 原始数据缓存位置
+    # ── 远程来源 (仅首次需要) ───────────────────────────────────────────────
     url: "https://huggingface.co/datasets/physion/bridge_data_v2"
+    # ── 数据格式信息 ────────────────────────────────────────────────────────
     format: "rlds"
     robot_type: FRANKA_EMIKA
     modalities: ["RGB", "ROBOT_STATE"]
@@ -39,7 +62,12 @@ datasets:
   - name: roboturk
     source: ROBOTURK
     description: "RoboTurk - Franka 远程操控数据"
+    # ── 本地路径配置 ────────────────────────────────────────────────────────
+    local_path: "data/unified/roboturk"         # ← 标准化数据位置
+    raw_path: "data/raw/roboturk"               # ← 原始数据缓存位置
+    # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://roboturk.stanford.edu/"
+    # ── 数据格式信息 ────────────────────────────────────────────────────────
     format: "hdf5"
     robot_type: FRANKA_EMIKA
     modalities: ["RGB", "DEPTH", "ROBOT_STATE"]
@@ -53,7 +81,12 @@ datasets:
   - name: maniskill
     source: MANISKILL
     description: "ManiSkill - 铰接物体操控仿真数据"
+    # ── 本地路径配置 ────────────────────────────────────────────────────────
+    local_path: "data/unified/maniskill"        # ← 标准化数据位置
+    raw_path: "data/raw/maniskill"              # ← 原始数据缓存位置
+    # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://maniskill.ai/"
+    # ── 数据格式信息 ────────────────────────────────────────────────────────
     format: "hdf5"
     robot_type: FRANKA_EMIKA
     modalities: ["RGB", "DEPTH", "POINT_CLOUD", "ROBOT_STATE"]
@@ -67,7 +100,12 @@ datasets:
   - name: language_table
     source: LANGUAGE_TABLE
     description: "Language-Table - 语言指令驱动的桌面操控"
+    # ── 本地路径配置 ────────────────────────────────────────────────────────
+    local_path: "data/unified/language_table"   # ← 标准化数据位置
+    raw_path: "data/raw/language_table"         # ← 原始数据缓存位置
+    # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://language-table.github.io/"
+    # ── 数据格式信息 ────────────────────────────────────────────────────────
     format: "tfrecord"
     robot_type: CUSTOM
     modalities: ["RGB", "LANGUAGE"]

@@ -71,6 +71,9 @@ class BridgeV2Adapter(DatasetAdapter):
         Args:
             source: 数据源路径或 HuggingFace 数据集 ID
                     (如 "bridge_v2" 或 "/path/to/local/bridge_v2")
+            **kwargs:
+                max_episodes: 最大加载轨迹数 (-1 表示全部)
+                demo_mode:    如果 True 且 HF 数据集不可用，生成模拟数据
 
         Yields:
             UnifiedSample: 统一格式的样本
@@ -83,32 +86,60 @@ class BridgeV2Adapter(DatasetAdapter):
             - reward:                   float32
             - is_terminal:              bool
         """
-        # ── 尝试加载数据集 ──────────────────────────────────────────────────
+        demo_mode = kwargs.get("demo_mode", False)
+        dataset = None
+
+        # ── 优先从 HuggingFace Hub 加载 ────────────────────────────────────
         try:
-            # 优先使用 HuggingFace datasets
             from datasets import load_dataset
+            from datasets.exceptions import DatasetNotFoundError
+
+            hf_dataset_id = source if "/" in source else "rail-berkeley/bridge_data_v2"
             dataset = load_dataset(
-                source if "/" in source else "physion/bridge_data_v2",
+                hf_dataset_id,
                 split="train",
-                streaming=True,  # 流式加载，节省内存
+                streaming=True,
             )
-        except ImportError:
-            # 回退: 使用 tensorflow_datasets
-            try:
-                import tensorflow_datasets as tfds
-                ds = tfds.load("bridge_dataset", split="train")
-                dataset = iter(ds)
-            except ImportError:
-                raise ImportError(
-                    "需要安装 datasets 或 tensorflow_datasets 库:\n"
-                    "  pip install datasets  # 推荐\n"
-                    "  # 或\n"
-                    "  pip install tensorflow_datasets"
+            print(f"[BridgeV2] 成功加载 HuggingFace 数据集: {hf_dataset_id}")
+
+        except (DatasetNotFoundError, Exception) as e:
+            print(f"[BridgeV2] HuggingFace 数据集不可用: {e}")
+            print(f"[BridgeV2] 尝试从本地路径加载...")
+
+            # ── 尝试从本地 RLDS/TFRecord 路径加载 ──────────────────────────
+            if os.path.isdir(source):
+                try:
+                    from datasets import load_dataset
+                    dataset = load_dataset(
+                        source,
+                        split="train",
+                        streaming=True,
+                    )
+                    print(f"[BridgeV2] 成功从本地路径加载: {source}")
+                except Exception:
+                    dataset = None
+
+        # ── 如果 HF 和本地都加载失败，使用模拟数据 ─────────────────────────
+        if dataset is None:
+            if demo_mode:
+                print(f"[BridgeV2] 使用模拟数据模式 (demo_mode=True)")
+                return self._generate_demo_data(**kwargs)
+            else:
+                print(f"[BridgeV2] 数据集 '{source}' 无法访问。")
+                print(f"[BridgeV2] 可用选项:")
+                print(f"  1. 设置 demo_mode=True 使用模拟数据进行测试")
+                print(f"  2. 从 HuggingFace 下载:")
+                print(f"     pip install datasets")
+                print(f"     python -c \"from datasets import load_dataset;\"")
+                print(f"     load_dataset('rail-berkeley/bridge_data_v2').save_to_disk('./data/bridge_v2')")
+                print(f"  3. 使用本地 RLDS/TFRecord 路径")
+                raise FileNotFoundError(
+                    f"数据集 '{source}' 无法加载。"
+                    " 请先下载数据集或设置 demo_mode=True 使用模拟数据。"
                 )
 
-        # ── 逐 episode 遍历 ─────────────────────────────────────────────────
+        # ── 逐 episode 遍历 (HF Dataset 格式) ──────────────────────────────
         for episode_idx, episode in enumerate(dataset):
-            # 如果指定了最大 episode 数，提前停止
             max_episodes = kwargs.get("max_episodes", -1)
             if max_episodes > 0 and episode_idx >= max_episodes:
                 break
@@ -116,33 +147,66 @@ class BridgeV2Adapter(DatasetAdapter):
             # ── 遍历 episode 中的每个 step ──────────────────────────────────
             steps = episode["steps"] if "steps" in episode else episode
             for step in steps:
-                # 提取观测
                 obs = {
                     "rgb": self._process_image(step["observation"]["image"]),
                     "robot_state": torch.tensor(
                         step["observation"]["state"], dtype=torch.float32
                     ),
                 }
-
-                # 提取动作
                 action = torch.tensor(step["action"], dtype=torch.float32)
-
-                # 提取奖励和终止信号
                 reward = float(step.get("reward", 0.0))
                 done = bool(step.get("is_terminal", False))
 
-                # 创建统一样本
-                sample = UnifiedSample(
-                    obs=obs,
-                    action=action,
-                    reward=reward,
-                    done=done,
-                    metadata={
-                        "episode": episode_idx,
-                        "dataset": "bridge_v2",
-                    }
+                yield UnifiedSample(
+                    obs=obs, action=action, reward=reward, done=done,
+                    metadata={"episode": episode_idx, "dataset": "bridge_v2"},
                 )
-                yield sample
+
+    def _generate_demo_data(self, **kwargs) -> Iterator[UnifiedSample]:
+        """
+        生成模拟 BridgeData V2 数据
+        ────────────────────────────────────────────────────────────────────────
+        当 HuggingFace Hub 和本地路径都不可用时，生成模拟数据供测试使用。
+        模拟数据包含随机生成的 RGB 图像和机器人状态，格式与真实数据一致。
+
+        Args:
+            **kwargs:
+                max_episodes: 最大生成轨迹数 (默认 3)
+                steps_per_episode: 每条轨迹的步数 (默认 50)
+        """
+        import random as _random
+
+        num_episodes = kwargs.get("max_episodes", 3) if kwargs.get("max_episodes", -1) > 0 else 3
+        steps_per_episode = kwargs.get("steps_per_episode", 50)
+
+        print(f"[BridgeV2] 生成 {num_episodes} 条模拟轨迹 (每条 {steps_per_episode} 步)")
+        print(f"[BridgeV2] 注意: 模拟数据仅用于测试流水线，请用真实数据训练模型")
+
+        for ep_idx in range(num_episodes):
+            for step in range(steps_per_episode):
+                # 生成随机 RGB 图像 (128,128,3) uint8 → 模拟真实相机输出
+                fake_image = np.random.randint(0, 256, size=(128, 128, 3), dtype=np.uint8)
+                # 生成随机机器人状态 (7 维关节位置)
+                fake_state = np.random.randn(7).astype(np.float32)
+                # 生成随机动作 (7 维增量位姿 + 夹爪)
+                fake_action = np.random.randn(7).astype(np.float32)
+
+                obs = {
+                    "rgb": self._process_image(fake_image),
+                    "robot_state": torch.tensor(fake_state, dtype=torch.float32),
+                }
+                action = torch.tensor(fake_action, dtype=torch.float32)
+                done = (step == steps_per_episode - 1)
+
+                yield UnifiedSample(
+                    obs=obs, action=action, reward=0.0, done=done,
+                    language_embed=None,
+                    metadata={
+                        "episode": ep_idx,
+                        "dataset": "bridge_v2",
+                        "demo_mode": True,
+                    },
+                )
 
     def _process_image(self, image: np.ndarray) -> torch.Tensor:
         """

@@ -1,0 +1,77 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA 大模型微调实验配置
+# ──────────────────────────────────────────────────────────────────────────────
+# 使用开源机器人数据集微调 VLA 大模型。
+# 支持多种微调方式: full / lora / qlora
+#
+# 使用方式:
+#   python train.py experiment=fusion/vla_finetune \
+#       vla.model=openvla-7b vla.finetune_method=lora
+# ═══════════════════════════════════════════════════════════════════════════════
+
+experiment_name: "vla_finetune"
+run_name: "vla_finetune_openvla_v1"
+seed: 42
+
+# ── 算法模块选择 ──
+algorithm:
+  primary: "vla"
+  secondary: []
+  fusion_mode: "vla_only"
+
+# ── VLA 大模型配置 ──
+vla:
+  model: "openvla-7b"            # 可选: openvla-7b / octo-base
+  finetune_method: "lora"        # full / lora / qlora
+  lora_rank: 32
+  lora_alpha: 16
+  target_modules: ["q_proj", "v_proj"]  # LoRA 目标模块
+  load_in_8bit: false
+
+# ── 训练阶段 ──
+training_phase: "full"           # action_head / full
+# action_head: 仅训练动作头 (冻结 VLM 主干)
+# full: 解冻全部权重端到端微调
+
+# ── 数据配置 ──
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA 模型的数据加载配置
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 本地标准化数据目录
+#   - VLA 微调需要语言标注的轨迹数据
+#   - 要求数据集中包含 language_instruction 字段
+#   - 路径指向 prepare_data.py 预处理后的 .arrow 文件目录
+#
+# 注意: VLA 模型参数量大 (7B)，batch_size 建议 8-16
+#       使用 gradient_accumulation_steps 累积梯度等效大 batch
+# ═══════════════════════════════════════════════════════════════════════════════
+data:
+  registry_path: "config/dataset/registry.yaml"  # 数据集注册表
+  data_dir: "data/unified"                        # ← 本地路径: VLA 微调数据
+  dataset_name: "bridge_v2"
+  batch_size: 16                 # VLA 模型大，批次较小 (7B 模型建议 8-16)
+  num_workers: 2                 # VLA 数据加载较慢，减少工作进程避免 OOM
+  augment: true
+  augment_config:
+    crop_scale: [0.9, 1.0]
+    brightness: 0.05
+    contrast: 0.05
+
+# ── 训练配置 ──
+training:
+  num_epochs: 50
+  learning_rate: 0.00005
+  warmup_steps: 100
+  weight_decay: 0.01
+  checkpoint_dir: "checkpoints/vla"
+  log_interval: 10
+  save_interval: 10
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 4
+
+# ── 评估配置 ──
+evaluation:
+  num_episodes: 30
+  render: true
+  video_dir: "videos/vla_eval"
+  eval_interval: 10

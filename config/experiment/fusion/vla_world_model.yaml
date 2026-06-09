@@ -1,0 +1,81 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA + 世界模型联合训练实验配置
+# ──────────────────────────────────────────────────────────────────────────────
+# VLA 生成多个候选动作，世界模型在想象中对每个候选动作进行推演评估，
+# 选择最优动作。实现"先想后做"的安全决策机制。
+#
+# 使用方式:
+#   python train.py experiment=fusion/vla_world_model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+experiment_name: "vla_world_model"
+run_name: "vla_wm_openvla_dreamer_v1"
+seed: 42
+
+# ── 算法模块选择 ──
+algorithm:
+  primary: "vla"
+  secondary: ["world_model"]
+  fusion_mode: "vla_world_model"
+
+# ── 融合引擎配置 ──
+fusion:
+  mode: "vla_world_model"
+  strategy: "cascade"
+  planning_horizon: 50            # 世界模型想象推演步长
+  subgoal_dim: 3
+
+# ── VLA 大模型配置 ──
+vla:
+  model: "openvla-7b"
+  finetune_method: "qlora"
+  lora_rank: 16
+  language_conditioned: true
+
+# ── 世界模型配置 ──
+world_model:
+  enabled: true
+  model: "dreamer"                # 世界模型算法: dreamer / td_mpc2
+  latent_dim: 256                 # 隐状态维度
+  imagine_horizon: 50             # 想象推演步长
+  num_candidates: 8               # VLA 候选动作数
+  # 世界模型用于:
+  # 1. 在 VLA 推理前进行动作后果的快速推演
+  # 2. 选择最优候选动作
+
+# ── 数据配置 ──
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA+世界模型融合训练的数据加载配置
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 【本地路径】标准化 Arrow 数据目录
+#   - 世界模型训练: 从本地加载真实轨迹数据学习环境动力学
+#   - VLA 微调: 从本地加载语言标注的轨迹数据
+#   注意: 世界模型的"想象数据"由模型自身生成，不从磁盘读取
+# ═══════════════════════════════════════════════════════════════════════════════
+data:
+  registry_path: "config/dataset/registry.yaml"  # 数据集注册表
+  data_dir: "data/unified/bridge_v2"              # ← 本地路径: 世界模型+ VLA 训练数据
+  batch_size: 128
+  num_workers: 4
+
+# ── 仿真配置 ──
+simulation:
+  backend: "mujoco"
+  time_step: 0.002
+  max_steps: 500
+  num_envs: 16
+  task: "pick_place"
+
+# ── 训练配置 ──
+training:
+  num_epochs: 150
+  checkpoint_dir: "checkpoints/vla_wm_fusion"
+  log_interval: 10
+  save_interval: 50
+
+# ── 评估配置 ──
+evaluation:
+  num_episodes: 50
+  render: true
+  video_dir: "videos/vla_wm_eval"
+  eval_interval: 50

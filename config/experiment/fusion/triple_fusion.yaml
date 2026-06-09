@@ -1,0 +1,96 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 三模块全闭环训练实验配置 (VLA + 世界模型 + RL)
+# ──────────────────────────────────────────────────────────────────────────────
+# 最强性能配置: VLA 做语义理解与高层规划，世界模型做想象推演，
+# RL 做精细控制。三模块形成正向循环。
+#
+# 决策流程:
+#   VLA 理解任务 → 设定子目标 → 世界模型规划运动轨迹 →
+#   RL 跟踪轨迹 → 实际执行 → 反馈给 VLA 和世界模型更新
+#
+# 使用方式:
+#   python train.py experiment=fusion/triple_fusion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+experiment_name: "triple_fusion"
+run_name: "triple_vla_wm_rl_v1"
+seed: 42
+
+# ── 算法模块选择 ──
+algorithm:
+  primary: "vla"
+  secondary: ["rl", "world_model"]
+  fusion_mode: "all"              # 三模块全闭环
+
+# ── 融合引擎配置 ──
+fusion:
+  mode: "all"
+  strategy: "cascade"             # 级联决策
+  planning_horizon: 50
+  subgoal_dim: 3
+
+# ── VLA 大模型配置 ──
+vla:
+  model: "openvla-7b"
+  finetune_method: "qlora"
+  lora_rank: 16
+  language_conditioned: true
+
+# ── RL 配置 ──
+rl:
+  algorithm: "sac"
+  obs_dim: 128
+  action_dim: 7
+  learning_rate: 0.0003
+  gamma: 0.99
+  num_envs: 16
+  vla_guidance_weight: 0.4
+  reward_from_vla: true
+
+# ── 世界模型配置 ──
+world_model:
+  enabled: true
+  model: "td_mpc2"               # TD-MPC2 更适合规划和控制的结合
+  latent_dim: 256
+  imagine_horizon: 50
+  num_candidates: 8
+
+# ── 数据配置 ──
+# ═══════════════════════════════════════════════════════════════════════════════
+# 三模块全闭环训练的数据加载配置
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 【本地路径】标准化 Arrow 数据目录
+#   - 世界模型初始训练: 从本地加载真实轨迹学习先验动力学
+#   - VLA 初始微调: 从本地加载语言标注轨迹
+#   - RL: 经验池数据主要来自仿真交互，离线 RL 部分使用本地数据
+#   三模块的数据流:
+#     本地文件 → VLA/世界模型初始训练 → 仿真交互 →
+#     RL 经验池 → 世界模型持续更新 → VLA 持续优化
+# ═══════════════════════════════════════════════════════════════════════════════
+data:
+  registry_path: "config/dataset/registry.yaml"  # 数据集注册表
+  data_dir: "data/unified/bridge_v2"              # ← 本地路径: 三模块共用训练数据
+  batch_size: 128
+  num_workers: 4
+
+# ── 仿真配置 ──
+simulation:
+  backend: "mujoco"
+  time_step: 0.002
+  max_steps: 500
+  num_envs: 16
+  task: "pick_place"
+
+# ── 训练配置 ──
+training:
+  num_epochs: 300
+  checkpoint_dir: "checkpoints/triple_fusion"
+  log_interval: 10
+  save_interval: 50
+
+# ── 评估配置 ──
+evaluation:
+  num_episodes: 100
+  render: true
+  video_dir: "videos/triple_fusion_eval"
+  eval_interval: 50

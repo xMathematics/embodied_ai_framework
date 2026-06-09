@@ -1,0 +1,90 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA + RL 联合训练实验配置
+# ──────────────────────────────────────────────────────────────────────────────
+# VLA 大模型提供高层语义理解与动作先验，RL 提供精细运动控制。
+# 融合方式: 加权平均 / 贝叶斯融合 / 优先级路由
+#
+# 使用方式:
+#   python train.py experiment=fusion/vla_rl_fusion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+experiment_name: "vla_rl_fusion"
+run_name: "vla_rl_octo_ppo_v1"
+seed: 42
+
+# ── 算法模块选择 ──
+algorithm:
+  primary: "vla"
+  secondary: ["rl"]
+  fusion_mode: "vla_rl"           # 融合模式
+
+# ── 融合引擎配置 ──
+fusion:
+  mode: "vla_rl"
+  strategy: "weighted_average"    # 融合策略
+  weighted_average:
+    vla_weight: 0.4               # VLA 权重
+    rl_weight: 0.6                # RL 权重
+    adaptive: true                # 根据置信度自适应调整
+  bayesian:
+    vla_confidence_threshold: 0.7
+    rl_confidence_scale: 1.0
+  priority:
+    default_controller: "rl"
+    fallback_threshold: 0.3
+
+# ── VLA 大模型配置 ──
+vla:
+  model: "octo"                   # 可选: openvla-7b / octo / rt-2-x
+  finetune_method: "lora"         # 微调方式
+  lora_rank: 32
+  language_conditioned: true
+  load_in_8bit: false
+
+# ── RL 配置 ──
+rl:
+  algorithm: "ppo"
+  obs_dim: 128
+  action_dim: 7
+  learning_rate: 0.0003
+  gamma: 0.99
+  vla_guidance_weight: 0.3       # VLA 指导权重 (0~1)
+  reward_from_vla: true          # 使用 VLA 打分作为奖励信号
+
+# ── 数据配置 ──
+# ═══════════════════════════════════════════════════════════════════════════════
+# VLA+RL 融合训练的数据加载配置
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 【本地路径】标准化 Arrow 数据目录
+#   - VLA 微调: 从该目录加载语言标注的轨迹数据
+#   - RL 离线数据: 从该目录加载演示数据用于 Offline RL 预训练
+#   - RL 在线数据: 来自仿真交互 (data_dir 不影响在线 RL)
+#   路径来源优先级: 实验配置 > registry.yaml > 内置默认
+# ═══════════════════════════════════════════════════════════════════════════════
+data:
+  registry_path: "config/dataset/registry.yaml"  # 数据集注册表
+  data_dir: "data/unified/bridge_v2"              # ← 本地路径: VLA 微调 + Offline RL 数据
+  batch_size: 128
+  num_workers: 4
+
+# ── 仿真配置 ──
+simulation:
+  backend: "mujoco"
+  time_step: 0.002
+  max_steps: 500
+  num_envs: 32
+  task: "pick_place"
+
+# ── 训练配置 ──
+training:
+  num_epochs: 200
+  checkpoint_dir: "checkpoints/vla_rl_fusion"
+  log_interval: 10
+  save_interval: 50
+
+# ── 评估配置 ──
+evaluation:
+  num_episodes: 50
+  render: true
+  video_dir: "videos/vla_rl_eval"
+  eval_interval: 50

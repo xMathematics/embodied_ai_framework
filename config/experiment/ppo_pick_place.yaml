@@ -10,9 +10,20 @@ run_name: "ppo_pick_place_v1"
 seed: 42
 
 # ── 数据配置 (Offline RL 可选的演示数据) ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# 数据加载方式: 从本地路径加载
+# ═══════════════════════════════════════════════════════════════════════════════
+# data_dir: 本地标准化 Arrow 数据目录
+#   - PPO 训练主要依靠仿真交互数据，data_dir 用于 Offline RL 的演示数据
+#   - 如不需要 Offline RL，可将 data_dir 留空或指向一个空目录
+#   - 路径支持: 相对路径 / 绝对路径 / 环境变量
+#
+# 注意: PPO 的经验池数据来自仿真环境 step() 的实时交互，非本地文件
+#       data_dir 仅在启用 Offline RL (使用 CQL/IQL 算法) 时使用
+# ═══════════════════════════════════════════════════════════════════════════════
 data:
-  registry_path: "config/dataset/registry.yaml"
-  data_dir: "data/unified/bridge_v2"
+  registry_path: "config/dataset/registry.yaml"  # 数据集注册表
+  data_dir: "data/unified/bridge_v2"              # ← 本地路径: 离线演示数据
   batch_size: 256
   num_workers: 4
 

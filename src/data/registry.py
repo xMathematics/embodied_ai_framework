@@ -39,13 +39,21 @@ class DatasetMeta:
     """
     数据集元信息类 (DatasetMeta)
     ────────────────────────────────────────────────────────────────────────────
-    描述一个数据集的所有元信息，用于自动化下载、加载和适配器选择。
+    描述一个数据集的所有元信息，用于本地加载、自动化适配器选择和路径管理。
 
     字段说明:
       name:          数据集名称 (简写，如 "bridge_v2")
       source:        数据来源 (Open X-Embodiment, RoboNet 等)
       description:   数据集简短描述
-      url:           下载地址 (HTTP/S3/HF Dataset ID)
+      local_path:    【关键】标准化数据的本地路径
+                     - 指向 prepare_data.py 输出的 Arrow IPC 文件目录
+                     - 训练时: UnifiedDataset(data_dir=local_path) 直接读取
+                     - 支持相对路径和绝对路径
+      raw_path:      原始数据本地缓存路径
+                     - 指向原始数据集文件 (HDF5/TFRecord/RLDS 等)
+                     - 仅 prepare_data.py 的适配器需要读取
+      url:           在线下载地址 (HTTP/S3/HF Dataset ID)
+                     - 仅首次获取数据时需要
       format:        原始数据格式 (TFRecord, HDF5, RLDS, pickle 等)
       robot_type:    使用的机器人类型
       modalities:    包含的传感器模态
@@ -54,11 +62,22 @@ class DatasetMeta:
       citation:      引用信息 (学术论文引用用)
       adapter_name:  对应的适配器类名
       license:       开源许可证
+
+    路径优先级 (从高到低):
+      1. 命令行参数 (--local_path)
+      2. 实验配置 (config.data.data_dir)
+      3. 本字段 (local_path)
+      4. 内置默认 (data/unified/{name})
     """
     name: str                          # 数据集名称
     source: DatasetSource              # 数据来源枚举
     description: str = ""              # 描述
-    url: str = ""                      # 下载地址
+    # ── 本地路径字段 (核心) ─────────────────────────────────────────────────
+    local_path: str = ""               # 【本地路径】标准化 Arrow 数据目录
+    raw_path: str = ""                 # 【本地路径】原始数据缓存目录
+    # ── 远程来源 ───────────────────────────────────────────────────────────
+    url: str = ""                      # 在线下载地址 (仅首次需要)
+    # ── 数据格式信息 ────────────────────────────────────────────────────────
     format: str = ""                   # 原始格式
     robot_type: RobotType = RobotType.CUSTOM  # 机器人类型
     modalities: List[SensorModality] = field(default_factory=list)  # 传感器模态
@@ -74,6 +93,8 @@ class DatasetMeta:
             "name": self.name,
             "source": self.source.name,
             "description": self.description,
+            "local_path": self.local_path,          # 本地标准化数据路径
+            "raw_path": self.raw_path,               # 本地原始数据路径
             "format": self.format,
             "robot": self.robot_type.name,
             "modalities": [m.name for m in self.modalities],
@@ -143,7 +164,12 @@ class DatasetRegistry:
                 name=item["name"],
                 source=DatasetSource[item["source"]],
                 description=item.get("description", ""),
+                # ── 本地路径: 从 YAML 读取，为空时使用默认值 ────────────────
+                local_path=item.get("local_path", ""),  # 如 "data/unified/bridge_v2"
+                raw_path=item.get("raw_path", ""),      # 如 "data/raw/bridge_v2"
+                # ── 远程来源 ────────────────────────────────────────────────
                 url=item.get("url", ""),
+                # ── 数据格式信息 ────────────────────────────────────────────
                 format=item.get("format", ""),
                 robot_type=RobotType[item.get("robot_type", "CUSTOM")],
                 modalities=[SensorModality[m] for m in item.get("modalities", [])],
