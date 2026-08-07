@@ -3,6 +3,18 @@
 从开源数据集输入到模拟仿真的全流程项目架构，采用**五层四流**模块化设计。
 支持模仿学习 (BC/ACT/Diffusion Policy)、强化学习 (PPO/SAC)、VLA 大模型 (OpenVLA/Octo) 及模块融合训练。
 
+> ⚠️ **迁移说明 (2026-08)**
+> 本框架已迁入 monorepo 的 `libs/python/framework/`。使用前请先进入本目录:
+> ```bash
+> cd libs/python/framework
+> pip install -e .
+> pytest tests -v          # 运行测试
+> python scripts/train.py  # 训练
+> ```
+> **数据目录**统一位于 monorepo 根 `data/`，本文档中 `data/...` 请理解为
+> `../../data/...`（相对本框架根目录）。具体任务与配置见
+> [`docs/usage_tutorial.md`](docs/usage_tutorial.md) 与 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
+
 ---
 
 ## 📋 目录

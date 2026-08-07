@@ -55,6 +55,26 @@ class SimBackendFactory:
     def __init__(self):
         self._backends: Dict[str, Type[SimulatorBackend]] = {}
 
+    @classmethod
+    def default(cls) -> "SimBackendFactory":
+        """创建一个已注册框架内置后端的工厂 (MuJoCo / PyBullet)"""
+        factory = cls()
+        factory._register_builtin()
+        return factory
+
+    def _register_builtin(self):
+        """注册框架内置的仿真后端 (导入失败的内置后端会被跳过)"""
+        try:
+            from src.simulation.backends.mujoco import MuJoCoBackend
+            self.register("mujoco", MuJoCoBackend)
+        except Exception:
+            pass
+        try:
+            from src.simulation.backends.pybullet import PyBulletBackend
+            self.register("pybullet", PyBulletBackend)
+        except Exception:
+            pass
+
     def register(self, name: str, backend_cls: Type[SimulatorBackend]) -> None:
         """
         注册仿真后端实现类

@@ -44,8 +44,8 @@ datasets:
     source: OPEN_X_EMBODIMENT
     description: "BridgeData V2 - WidowX 250 桌面操控数据集"
     # ── 本地路径配置 ────────────────────────────────────────────────────────
-    local_path: "data/unified/bridge_v2"       # ← 标准化数据位置 (推荐)
-    raw_path: "data/raw/bridge_v2"              # ← 原始数据缓存位置
+    local_path: "../../data/unified/bridge_v2"  # ← 标准化数据位置 (monorepo 共享 data/)
+    raw_path: "../../data/raw/bridge_v2"         # ← 原始数据缓存位置
     # ── 远程来源 (仅首次需要) ───────────────────────────────────────────────
     url: "https://huggingface.co/datasets/physion/bridge_data_v2"
     # ── 数据格式信息 ────────────────────────────────────────────────────────
@@ -63,8 +63,8 @@ datasets:
     source: ROBOTURK
     description: "RoboTurk - Franka 远程操控数据"
     # ── 本地路径配置 ────────────────────────────────────────────────────────
-    local_path: "data/unified/roboturk"         # ← 标准化数据位置
-    raw_path: "data/raw/roboturk"               # ← 原始数据缓存位置
+    local_path: "../../data/unified/roboturk"    # ← 标准化数据位置
+    raw_path: "../../data/raw/roboturk"          # ← 原始数据缓存位置
     # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://roboturk.stanford.edu/"
     # ── 数据格式信息 ────────────────────────────────────────────────────────
@@ -82,8 +82,8 @@ datasets:
     source: MANISKILL
     description: "ManiSkill - 铰接物体操控仿真数据"
     # ── 本地路径配置 ────────────────────────────────────────────────────────
-    local_path: "data/unified/maniskill"        # ← 标准化数据位置
-    raw_path: "data/raw/maniskill"              # ← 原始数据缓存位置
+    local_path: "../../data/unified/maniskill"   # ← 标准化数据位置
+    raw_path: "../../data/raw/maniskill"         # ← 原始数据缓存位置
     # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://maniskill.ai/"
     # ── 数据格式信息 ────────────────────────────────────────────────────────
@@ -101,8 +101,8 @@ datasets:
     source: LANGUAGE_TABLE
     description: "Language-Table - 语言指令驱动的桌面操控"
     # ── 本地路径配置 ────────────────────────────────────────────────────────
-    local_path: "data/unified/language_table"   # ← 标准化数据位置
-    raw_path: "data/raw/language_table"         # ← 原始数据缓存位置
+    local_path: "../../data/unified/language_table"  # ← 标准化数据位置
+    raw_path: "../../data/raw/language_table"        # ← 原始数据缓存位置
     # ── 远程来源 ────────────────────────────────────────────────────────────
     url: "https://language-table.github.io/"
     # ── 数据格式信息 ────────────────────────────────────────────────────────

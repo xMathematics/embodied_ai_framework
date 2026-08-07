@@ -124,12 +124,18 @@ class MuJoCoBackend(SimulatorBackend):
         mujoco.mj_step(self._model, self._data)
 
         # ── 读取观测 ────────────────────────────────────────────────────────
+        # 注意: 必须用 mj_name2id 判断 body 是否存在，不能用 hasattr(self._data, "body")
+        # (mjData.body 是包装器属性，永远存在，直接用 data.body("xxx") 会抛 KeyError)
+        has_end_effector = (
+            mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_BODY,
+                              "end_effector") != -1
+        )
         obs = {
             "joint_pos": torch.tensor(self._data.qpos.copy(), dtype=torch.float32),
             "joint_vel": torch.tensor(self._data.qvel.copy(), dtype=torch.float32),
             "end_effector": torch.tensor(
                 self._data.body("end_effector").xpos.copy()
-                if hasattr(self._data, "body")
+                if has_end_effector
                 else np.zeros(3),
                 dtype=torch.float32
             ),

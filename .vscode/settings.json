@@ -1,4 +1,103 @@
 {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VS Code 工作区配置 (ROS2 + 具身智能深度学习 + CUDA)
+    // ──────────────────────────────────────────────────────────────────────────
+    // 环境说明:
+    //   - ROS2: Jazzy (/opt/ros/jazzy)
+    //   - CUDA: /usr/local/cuda (nvcc 13.0, RTX 5060 Ti)
+    //   - Python 解释器: conda env py313 (/home/dzxu/anaconda3/envs/py313/bin/python,
+    //     torch 2.12.0+cu130, CUDA 可用)
+    // ═══════════════════════════════════════════════════════════════════════════
+
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+
+    // ── Python / Pylance ────────────────────────────────────────────────────
+    "python.defaultInterpreterPath": "/home/dzxu/anaconda3/envs/py313/bin/python",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.indexing": true,
+    "python.analysis.autoSearchPaths": true,
+    // 额外 Python 搜索路径: Python 框架根(libs/python/framework) + ROS2 Python 消息库
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/libs/python/framework",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ],
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+
+    // ── Python 格式与测试 ───────────────────────────────────────────────────
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    },
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": ["libs/python/framework/tests", "-v"],
+
+    // ── C/C++ (ROS2 + CUDA) ────────────────────────────────────────────────
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.intelliSenseEngine": "default",
+    // 优先使用 colcon 生成的 compile_commands.json 提供精确 IntelliSense
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/ros/build/compile_commands.json",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+
+    // ── CUDA (Nsight VSCode Edition) ───────────────────────────────────────
+    "nvidia.nsight.cuda.toolchainPath": "/usr/local/cuda/bin",
+
+    // ── CMake ──────────────────────────────────────────────────────────────
+    "cmake.configureOnOpen": true,
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+
+    // ── 文件关联 (ROS2 文件类型) ────────────────────────────────────────────
+    "files.associations": {
+        "*.urdf": "xml",
+        "*.xacro": "xml",
+        "*.launch": "xml",
+        "*.launch.py": "python",
+        "*.sdf": "xml",
+        "*.world": "xml",
+        "*.msg": "plaintext",
+        "*.srv": "plaintext",
+        "*.action": "plaintext",
+        "*.pyx": "python",
+        "*.pxd": "python"
+    },
+
+    // ── ROS (ms-iot.vscode-ros 扩展) ───────────────────────────────────────
+    "ros.distro": "jazzy",
+    "ros.pythonPath": "/home/dzxu/anaconda3/envs/py313/bin/python",
+
+    // ── 集成终端: 预设 ROS2 环境变量 ──────────────────────────────────────
+    // 注: 完整环境请执行 `source /opt/ros/jazzy/setup.bash` (tasks 已自动处理)
+    "terminal.integrated.env.linux": {
+        "ROS_DISTRO": "jazzy",
+        "ROS_VERSION": "2",
+        "AMENT_PREFIX_PATH": "/opt/ros/jazzy",
+        "COLCON_CURRENT_PREFIX": "/opt/ros/jazzy",
+        "PYTHONPATH": "${workspaceFolder}/libs/python/framework:/opt/ros/jazzy/lib/python3.12/site-packages"
+    },
+
+    // ── 资源管理器 / 搜索 排除 (构建产物) ──────────────────────────────────
+    "search.exclude": {
+        "**/build/**": true,
+        "**/install/**": true,
+        "**/log/**": true,
+        "**/__pycache__/**": true,
+        "**/*.pyc": true,
+        "**/.pytest_cache/**": true
+    },
+    "files.exclude": {
+        "**/__pycache__/**": true,
+        "**/*.pyc": true,
+        "**/.pytest_cache/**": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/install/**": true,
+        "**/log/**": true
+    }
 }

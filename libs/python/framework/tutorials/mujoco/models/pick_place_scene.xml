@@ -1,0 +1,148 @@
+<!--
+================================================================================
+  robot_arm.xml — 自定义 5-DoF 机械臂 + 两指平行夹爪 (MJCF 格式)
+  ==============================================================================
+  这是一个"从零手写"的机械臂模型，用于演示 MuJoCo 的 MJCF 场景描述语言。
+  关节结构 (共 4 个旋转关节 + 2 个夹爪滑动关节):
+    1. shoulder_yaw    (绕 Z 轴)  肩部偏航 —— 决定手臂所在竖直平面
+    2. shoulder_pitch  (绕 Y 轴)  肩部俯仰 —— 上臂抬起/放下
+    3. elbow_pitch     (绕 Y 轴)  肘部俯仰
+    4. wrist_pitch     (绕 Y 轴)  腕部俯仰 —— 使夹爪朝向目标
+    5. left_finger     (滑动)     左手指开合
+    6. right_finger    (滑动)     右手指开合 (轴反向，实现对称开合)
+
+  执行器: 全部使用 position 型 (位置伺服)，因为位置控制比力矩控制稳定得多，
+  是机器人控制里最常用的模式。夹爪位置执行器刚度更高，保证抓取可靠。
+
+  用法:
+    import mujoco
+    model = mujoco.MjModel.from_xml_path("robot_arm.xml")
+    data  = mujoco.MjData(model)
+================================================================================
+-->
+<mujoco model="robot_arm">
+  <!-- 角度单位用弧度，物理步长 4ms (250Hz)，保证接触仿真稳定 -->
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 -9.81" iterations="50"/>
+
+  <!-- 默认值: 所有几何体的摩擦系数、所有关节的阻尼/惯性 -->
+  <default>
+    <geom type="capsule" rgba="0.35 0.35 0.4 1"
+          friction="1 0.1 0.1" solimp="0.9 0.95 0.001" solref="0.002 1"/>
+    <joint damping="0.05" armature="0.01"/>
+  </default>
+
+  <!-- 自碰撞排除:
+       相邻连杆在关节附近几何必然重叠 (肩关节球体与基座柱、上臂与基座柱)。
+       若不做排除，机器人会被自己的"身体"卡住，无法正常转动。
+       注意: 排除的是 base 与手臂各段之间的碰撞，不影响手臂与桌面/方块接触。 -->
+  <contact>
+    <exclude body1="base" body2="shoulder"/>
+    <exclude body1="base" body2="upper_arm"/>
+    <exclude body1="base" body2="elbow"/>
+    <exclude body1="base" body2="forearm"/>
+    <!-- 手指与手臂本体的自碰撞也要排除:
+         手指闭合时会自然贴近前臂末端, 若不排除会被自己卡住而无法夹紧方块 -->
+    <exclude body1="forearm" body2="left_finger"/>
+    <exclude body1="forearm" body2="right_finger"/>
+    <exclude body1="wrist" body2="left_finger"/>
+    <exclude body1="wrist" body2="right_finger"/>
+    <exclude body1="gripper_base" body2="left_finger"/>
+    <exclude body1="gripper_base" body2="right_finger"/>
+  </contact>
+
+  <worldbody>
+    <light name="light0" pos="1 1 2.5" dir="-1 -1 -2" diffuse="0.9 0.9 0.9"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.9 0.9 0.9 1"/>
+
+    <!-- 桌面 (顶面在 z=0.4) -->
+    <geom name="table" type="box" size="0.45 0.3 0.2" pos="0 0 0.2"
+          rgba="0.65 0.55 0.45 1"/>
+
+    <!-- 基座: 固定在桌面上, 肩关节抬高到 0.85m。
+         为什么要这么高? 手臂下探抓取方块时, 肘部不能碰到桌面 (0.4m)。
+         肩部越高, 手臂越能以"肘高"姿态工作, 避免肘部落到桌面以下。 -->
+    <body name="base" pos="0 0 0.4">
+      <geom name="base_geom" type="box" size="0.05 0.05 0.225" pos="0 0 0.225"
+            rgba="0.25 0.25 0.3 1"/>
+
+      <!-- 肩部: shoulder_yaw 关节 (绕世界 Z 轴旋转，改变手臂朝向) -->
+      <body name="shoulder" pos="0 0 0.45">
+        <joint name="shoulder_yaw" type="hinge" axis="0 0 1" range="-3.14 3.14"/>
+        <geom name="shoulder_geom" type="sphere" size="0.045" rgba="0.2 0.45 0.85 1"/>
+
+        <!-- 上臂: shoulder_pitch 关节 (绕 Y 轴俯仰) -->
+        <body name="upper_arm" pos="0 0 0">
+          <joint name="shoulder_pitch" type="hinge" axis="0 1 0" range="-2.5 2.5"/>
+          <geom name="upper_arm_geom" type="capsule" size="0.028"
+                fromto="0 0 0 0.28 0 0" rgba="0.2 0.45 0.85 1"/>
+
+          <!-- 肘部: elbow_pitch 关节 -->
+          <body name="elbow" pos="0.28 0 0">
+            <joint name="elbow_pitch" type="hinge" axis="0 1 0" range="-2.5 2.5"/>
+            <geom name="elbow_geom" type="sphere" size="0.035" rgba="0.95 0.6 0.1 1"/>
+
+            <!-- 前臂 (无关节，纯粹几何体) -->
+            <body name="forearm" pos="0 0 0">
+              <geom name="forearm_geom" type="capsule" size="0.022"
+                    fromto="0 0 0 0.24 0 0" rgba="0.2 0.45 0.85 1"/>
+
+              <!-- 腕部: wrist_pitch 关节 (控制夹爪朝向) -->
+              <body name="wrist" pos="0.24 0 0">
+                <joint name="wrist_pitch" type="hinge" axis="0 1 0" range="-2.5 2.5"/>
+                <geom name="wrist_geom" type="sphere" size="0.024" rgba="0.95 0.6 0.1 1"/>
+
+                <!-- 夹爪基座: 小方块, 避免与被抓物体碰撞 -->
+                <body name="gripper_base" pos="0 0 0">
+                  <geom name="gripper_base_geom" type="box"
+                        size="0.012 0.015 0.008" pos="0.02 0 0" rgba="0.95 0.6 0.1 1"/>
+
+                  <!-- 左手指: 平直手指 (平面法向无楔形效应, 抬升可靠) -->
+                  <body name="left_finger" pos="0.03 -0.04 0">
+                    <joint name="left_finger" type="slide" axis="0 1 0" range="0 0.05" armature="0.02" damping="0.5"/>
+                    <geom name="left_finger_geom" type="box"
+                          size="0.02 0.012 0.018" pos="0.012 0 0" rgba="0.9 0.2 0.2 1"/>
+                  </body>
+
+                  <!-- 右手指: 平直手指 -->
+                  <body name="right_finger" pos="0.03 0.04 0">
+                    <joint name="right_finger" type="slide" axis="0 -1 0" range="0 0.05" armature="0.02" damping="0.5"/>
+                    <geom name="right_finger_geom" type="box"
+                          size="0.02 0.012 0.018" pos="0.012 0 0" rgba="0.9 0.2 0.2 1"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  
+    <camera name="side" pos="0.1 -1.1 0.75" xyaxes="1 0 0 0 0.35 0.94"
+            fovy="55"/>
+    <camera name="top" pos="0 0 1.3" xyaxes="1 0 0 0 -1 0" fovy="50"/>
+    
+    <!-- 被抓取的方块: 简单立方体, freejoint 赋予其 6 自由度 -->
+    <body name="block" pos="0.25 0.0 0.42">
+      <freejoint/>
+      <geom name="block_geom" type="box" size="0.02 0.02 0.02"
+            rgba="0.2 0.8 0.3 1" mass="0.05" friction="1.5 0.2 0.1"/>
+    </body>
+
+    <!-- 目标落点标记: 只做可视化，不影响物理 -->
+    <body name="target" pos="-0.1 -0.25 0.401">
+      <geom name="target_geom" type="cylinder" size="0.035 0.002"
+            rgba="0.95 0.3 0.1 0.9" mass="0" contype="0" conaffinity="0"/>
+    </body>
+      </worldbody>
+
+  <!-- 执行器: 4 个位置伺服 (关节) + 2 个位置伺服 (手指) -->
+  <actuator>
+    <position name="shoulder_yaw_act"   joint="shoulder_yaw"   kp="200" ctrlrange="-3.14 3.14"/>
+    <position name="shoulder_pitch_act" joint="shoulder_pitch" kp="200" ctrlrange="-2.5 2.5"/>
+    <position name="elbow_pitch_act"    joint="elbow_pitch"    kp="200" ctrlrange="-2.5 2.5"/>
+    <position name="wrist_pitch_act"    joint="wrist_pitch"    kp="200" ctrlrange="-2.5 2.5"/>
+    <position name="left_finger_act"    joint="left_finger"    kp="2000" ctrlrange="0 0.05"/>
+    <position name="right_finger_act"   joint="right_finger"   kp="2000" ctrlrange="0 0.05"/>
+  </actuator>
+</mujoco>

@@ -1,0 +1,38 @@
+
+<mujoco model="cartpole">
+  <!-- 全局参数: 仿真步长 20ms (50Hz)，标准 RL 环境节奏 -->
+  <option timestep="0.02"/>
+
+  <!-- 默认值: 给所有关节加一点阻尼，避免数值振荡 -->
+  <default>
+    <joint damping="0.1"/>
+  </default>
+
+  <worldbody>
+    <!-- 光源 (没有光照则渲染是黑的) -->
+    <light name="light" pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+
+    <!-- 地面 (纯视觉 + 兜底碰撞) -->
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.9 0.9 0.9 1"/>
+
+    <!-- 小车 body: 悬空 0.15m, 包含一个滑动关节 (沿 X 轴平移) -->
+    <body name="cart" pos="0 0 0.15">
+      <joint name="slider" type="slide" axis="1 0 0" range="-1.2 1.2"/>
+      <geom name="cart_geom" type="box" size="0.25 0.06 0.06" rgba="0.2 0.6 1 1"/>
+
+      <!-- 摆杆 body (小车的子体): 包含一个铰链关节 (绕 Y 轴旋转) -->
+      <body name="pole" pos="0 0 0.06">
+        <joint name="hinge" type="hinge" axis="0 1 0" range="-180 180"/>
+        <geom name="pole_geom" type="capsule" size="0.03 0.25" pos="0 0 0.25"
+              rgba="1 0.3 0.3 1"/>
+        <geom name="pole_mass" type="sphere" size="0.05" pos="0 0 0.5"
+              rgba="1 0.8 0.3 1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- 执行器: motor 表示"力矩控制"，gear 把 ctrl 放大 10 倍 (可理解为力臂) -->
+  <actuator>
+    <motor name="cart_motor" joint="slider" gear="10" ctrlrange="-3 3"/>
+  </actuator>
+</mujoco>

@@ -1,0 +1,21 @@
+
+<mujoco model="pendulum">
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+
+  <worldbody>
+    <light name="light" pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="pivot" type="cylinder" size="0.03 0.01" pos="0 0 0" rgba="0.5 0.5 0.5 1"/>
+
+    <!-- 单摆: 铰链在原点, 摆杆沿 +Z, 摆尖有配重 -->
+    <body name="pole" pos="0 0 0">
+      <joint name="hinge" type="hinge" axis="0 1 0"/>
+      <geom name="pole_geom" type="capsule" size="0.025 0.25" pos="0 0 0.25" rgba="0.8 0.3 0.9 1"/>
+      <geom name="pole_mass" type="sphere" size="0.06" pos="0 0 0.5" rgba="0.95 0.6 0.1 1"/>
+    </body>
+  </worldbody>
+
+  <!-- 力矩执行器: ctrl 单位 = Nm -->
+  <actuator>
+    <motor name="motor" joint="hinge" gear="1" ctrlrange="-10 10"/>
+  </actuator>
+</mujoco>

@@ -157,6 +157,9 @@ def compute_gae(
     advantages = torch.zeros_like(rewards)
     gae = 0.0
 
+    # dones 可能是 bool 张量, 转成 float 以便参与算术
+    dones = dones.float()
+
     # 反向递推计算 GAE
     for t in reversed(range(T)):
         # TD 误差: δ_t = r_t + γ * V(s_{t+1}) * (1-done) - V(s_t)
@@ -245,12 +248,14 @@ class PPOTrainer(RLTrainer):
             next_obs, rewards, dones, infos = env.step(action.cpu())
 
             # ── 存储 ────────────────────────────────────────────────────────
-            obs_list.append(obs_tensor)
-            action_list.append(action)
-            reward_list.append(rewards.to(self.device))
-            done_list.append(dones.to(self.device))
-            value_list.append(value)
-            log_prob_list.append(log_prob)
+            # 注意: 存入 buffer 的张量必须 detach, 否则更新时的 backward
+            # 会尝试穿透旧的采样图, 导致"重复反向传播"错误
+            obs_list.append(obs_tensor.detach())
+            action_list.append(action.detach())
+            reward_list.append(rewards.to(self.device).detach())
+            done_list.append(dones.to(self.device).detach())
+            value_list.append(value.detach())
+            log_prob_list.append(log_prob.detach())
 
             total_reward += rewards.sum().item()
             num_episodes += dones.sum().item()
@@ -259,6 +264,7 @@ class PPOTrainer(RLTrainer):
         # ── 计算最后一个状态的价值 (用于 GAE) ─────────────────────────────
         last_obs = torch.stack([o["robot_state"] for o in obs]).to(self.device)
         _, _, last_value = self.ac(last_obs)
+        last_value = last_value.detach()
 
         # ── 转换为 Tensor ──────────────────────────────────────────────────
         rewards = torch.stack(reward_list)
@@ -272,14 +278,14 @@ class PPOTrainer(RLTrainer):
         advantages = compute_gae(rewards, values_aug, dones, self.gamma, self.gae_lambda)
         returns = advantages + values
 
-        # ── 存储到经验缓冲区 ────────────────────────────────────────────────
+        # ── 存储到经验缓冲区 (全部展平为 (T*N, ...), 便于按样本采样) ────────
         self._buffer = {
-            "obs": torch.cat(obs_list),
-            "actions": actions,
-            "log_probs": log_probs,
-            "values": values,
-            "advantages": advantages,
-            "returns": returns,
+            "obs": torch.cat(obs_list),                 # (T*N, obs_dim)
+            "actions": actions.reshape(-1, actions.shape[-1]),   # (T*N, action_dim)
+            "log_probs": log_probs.reshape(-1),
+            "values": values.reshape(-1),
+            "advantages": advantages.reshape(-1),
+            "returns": returns.reshape(-1),
         }
 
         return {
@@ -336,7 +342,9 @@ class PPOTrainer(RLTrainer):
         )
 
         return {
-            "total_loss": total_loss.item(),
+            # total_loss 保留张量 (train_on_buffer 需对其反向传播),
+            # 其余指标用 .item() 便于日志
+            "total_loss": total_loss,
             "policy_loss": policy_loss.item(),
             "value_loss": value_loss.item(),
             "entropy": entropy.mean().item(),
